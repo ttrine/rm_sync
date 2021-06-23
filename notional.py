@@ -66,11 +66,25 @@ class Notion:
 
         block = self.other_client.get_block(parent_id)
 
-        # First add the link to the end of the page
-        block.children.add_new(PageBlock, title=name)
+        # First locate and prepare the Folders section
+        if len(block.children) > 0 and block.children[-1].title == '':
+            # Remove the trailing whitespace block Notion adds, if present
+            block.children[-1].remove()
 
-        # Then re-arrange the folder list to include the new folder in alphabetical order
-        folders_header_index = [i for i, child in enumerate(block.children) if child.title == 'Folders'][0]
+        folder_header_blocks = [i for i, child in enumerate(block.children) if child.title == 'Folders']
+        if len(folder_header_blocks) == 0:
+            # There are no subfolders yet; add Folders header and then the folder
+            self.append_header(parent_id, "Folders")
+            # Need to tell unofficial client about change made by official one
+            block.refresh()
+            return block.children.add_new(PageBlock, title=name)
+
+        folders_header_index = folder_header_blocks[0]
+
+        # Add the link to the end of the page
+        new_sub_folder = block.children.add_new(PageBlock, title=name)
+
+        # Re-arrange the folder list to include the new folder in alphabetical order
         folders = block.children[folders_header_index + 1:]
         folders = sorted(folders, key=lambda folder: folder.title.lower())
 
@@ -79,6 +93,8 @@ class Notion:
         new_id_list.extend([child.id for child in folders])
 
         block.set('content', new_id_list)
+
+        return new_sub_folder
 
     def get_file_ids(self, parent_id):
         """ Return a list of IDs for all files listed on a given Notion page. """
@@ -92,7 +108,7 @@ class Notion:
 
     def rename_file(self, id_, text):
         """ Rename a file link block with a given ID using the unofficial Notion API. """
-        block = self.other_client.get_block(id_)
+        block = self.other_client.get_block(id_.replace('-', ''))
         _, url = tuple(block.title.replace('[', '').replace(')', '').split(']('))
         block.title = f"[{text}]({url})"
 
@@ -106,8 +122,17 @@ class Notion:
         """ Add a bulleted file link in alphabetical order to a Notion page using the unofficial Notion API. """
         block = self.other_client.get_block(id_)
 
+        if len(block.children) > 0 and block.children[-1].title == '':
+            # Remove the trailing whitespace block Notion adds, if present
+            block.children[-1].remove()
+
+        if len(block.children) == 0:
+            # This is a new page; just add the Files header and the link
+            self.append_header(id_, "Files")
+            return block.children.add_new(BulletedListBlock, title=f"[{name}]({url})")
+
         # First add the link to the end of the page
-        block.children.add_new(BulletedListBlock, title=f"[{name}]({url})")
+        new_file = block.children.add_new(BulletedListBlock, title=f"[{name}]({url})")
 
         # Then re-arrange the file list to include the new file in alphabetical order
         folders_header_index = [i for i, child in enumerate(block.children) if child.title == 'Folders'][0]
@@ -123,7 +148,8 @@ class Notion:
 
         block.set('content', new_id_list)
 
+        return new_file
+
     def rename_sub_folder(self, id_, name):
         """ Rename a Notion folder with a given ID using the unofficial Notion API. """
         self.other_client.get_block(id_).title = name
-

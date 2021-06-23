@@ -19,60 +19,65 @@ notion = Notion(os.environ["OFFICIAL_NOTION_TOKEN"],
                 os.environ["NOTION_ROOT"])
 
 
-async def create_file(rm_file, drive_id):
-    """ Convert a raw RM file to a PDF, upload it to Drive, and return the upload URL. """
-    logger.info(f"Processing {await rm_file.type()} {rm_file.name}. id_:{rm_file.id}")
-    logger.info("\tConverting to PDF")
+async def convert_to_pdf(rm_file):
+    """ Convert a raw RM file to a PDF. """
+    logger.info(f"Converting {await rm_file.type()} {rm_file.name}. id_:{rm_file.id}")
     try:
-        pdf = await rm_file.annotated()
+        return await rm_file.annotated()
     except TypeError as e:
-        logger.error(f"\tCould not convert {rm_file.name} to PDF, "
-                     f"likely due to missing size info in the original PDF:\n\t{e}")
+        logger.error(f"Could not convert {rm_file.name} to PDF, likely due to missing size info in the original PDF.")
+        logger.error(f"Error message:{e}")
         return
     except Exception as e:
-        logger.error(f"\tCould not convert {rm_file.name} to PDF for some unknown reason:\n\t{e}")
+        logger.error(f"Could not convert {rm_file.name} to PDF for some unknown reason.")
+        logger.error(f"Error message: {e}")
         return
 
+
+async def create_file(rm_file, drive_id):
+    """ Convert an new RM file to PDF and upload it to Drive. """
+    pdf = await convert_to_pdf(rm_file)
+    if not pdf:
+        return
     try:
-        logger.info("\tUploading to drive")
+        logger.debug("Uploading to drive")
         return drive.upload_pdf(drive_id, rm_file.name, pdf)
     except Exception as e:
-        logger.error(f"\tCould not upload {rm_file.name} to drive:\n\t{e}")
+        logger.error(f"Could not upload {rm_file.name} to drive.")
+        logger.error(f"Error message: {e}")
         return
 
 
 async def modify_file(folder, rm_file):
     """ Rename and re-upload a modified RM file to Drive and Notion. """
-    logger.info(f"Updating {await rm_file.type()} {rm_file.name}. id_:{rm_file.id}")
+    pdf = await convert_to_pdf(rm_file)
     try:
-        pdf = await rm_file.annotated()
-    except TypeError as e:
-        logger.error(f"\tCould not convert {rm_file.name} to PDF, "
-                     f"likely due to missing size info in the original PDF:\n\t{e}")
-        return
-    except Exception as e:
-        logger.error(f"\tCould not convert {rm_file.name} to PDF for some unknown reason:\n\t{e}")
-        return
-
-    try:
-        if folder.name != rm_file.name:
-            logger.info("\tFile name has changed, renaming on Drive and Notion")
-        drive.rename(folder.drive.files[rm_file.id], rm_file.name)
+        logger.debug("Renaming on Drive and Notion")
+        drive.rename(folder.drive.files[rm_file.id]['id'], rm_file.name)
         notion.rename_file(folder.notion.files[rm_file.id], rm_file.name)
-        logger.info("\tUploading to drive")
-        return drive.replace_pdf(folder.drive.files[rm_file.id], pdf)
+
+        logger.debug("Uploading to drive")
+        drive.replace_pdf(folder.drive.files[rm_file.id]['id'], pdf)
+
+        return True
+
     except Exception as e:
-        logger.error(f"\tCould not update {rm_file.name} in drive:\n\t{e}")
+        logger.error(f"Could not update {rm_file.name}.")
+        logger.error(f"Error message: {e}")
         return
 
 
 async def delete_file(folder, rm_file):
     """ Delete a removed RM file from Drive and Notion. """
-    drive.delete(folder.drive.files[rm_file.id])
-    notion.delete(folder.notion.files[rm_file.id])
-
-    del folder.drive.files[rm_file.id]
-    del folder.notion.files[rm_file.id]
+    try:
+        logger.debug("Deleting Drive file")
+        drive.delete(folder.drive.files[rm_file.id]['id'])
+        logger.debug("Deleting Notion file")
+        notion.delete(folder.notion.files[rm_file.id])
+        return True
+    except Exception as e:
+        logger.error(f"Could not delete {rm_file.name}.")
+        logger.error(f"Error message: {e}")
 
 
 async def process_files(folder, file_updates):
@@ -86,75 +91,97 @@ async def process_files(folder, file_updates):
             folder.drive.add_file(rm_file.id, dict(id=drive_file['id'],
                                                    name=rm_file.name,
                                                    url=drive_file['embedLink']))
-            notion.add_file(folder.notion.id_, rm_file.name, drive_file['embedLink'])
+
+            notion_file = notion.add_file(folder.notion.id_, rm_file.name, drive_file['embedLink'])
+            folder.notion.add_file(rm_file.id, notion_file.id)
 
     for rm_file in file_updates.modified:
-        await modify_file(folder, rm_file)
+        success = await modify_file(folder, rm_file)
+
+        # If the upload went smoothly, update the Folder data
+        if success:
+            folder.rm.add_file(rm_file.id, rm_file.version)
+            folder.drive.files[rm_file.id]['name'] = rm_file.name
 
     for rm_file in file_updates.deleted:
-        await delete_file(folder, rm_file)
+        success = await delete_file(folder, rm_file)
+
+        # If the upload went smoothly, delete the associated Folder data
+        if success:
+            del folder.rm.files[rm_file.id]
+            del folder.drive.files[rm_file.id]
+            del folder.notion.files[rm_file.id]
 
 
 async def create_sub_folder(folder, rm_sub_folder):
     logger.info(f"Creating sub-folder {rm_sub_folder.name}")
 
-    drive_sub_folder = drive.create_folder(folder.drive.id_, rm_sub_folder.name)
-    notion_sub_folder = notion.add_sub_folder(folder.notion.id_, folder.name)
-
-    # Record the sub-folder data
-    folder.rm.add_sub_folder(rm_sub_folder.id, rm_sub_folder.version)
-    folder.drive.add_sub_folder(rm_sub_folder.id, dict(id=drive_sub_folder['id'],
-                                                       name=rm_sub_folder.name,
-                                                       url=drive_sub_folder['embedLink']))
-    folder.notion.add_sub_folder(rm_sub_folder.id, notion_sub_folder['id'])
-
-    sub_folder = Folder(rm_sub_folder.name,
-                        rm=dict(id_=rm_sub_folder.id),
-                        drive=dict(id_=drive_sub_folder['id']),
-                        notion=dict(id_=notion_sub_folder['id']))
-
-    return sub_folder
+    try:
+        drive_sub_folder = drive.create_folder(folder.drive.id_, rm_sub_folder.name)
+        notion_sub_folder = notion.add_sub_folder(folder.notion.id_, rm_sub_folder.name)
+        return drive_sub_folder, notion_sub_folder
+    except Exception as e:
+        logger.error(f"Could not upload {rm_sub_folder.name}.")
+        logger.error(f"Error message: {e}")
+        return
 
 
 async def modify_sub_folder(folder, rm_sub_folder):
     logger.info(f"Updating modified folder {rm_sub_folder.name}")
 
-    # Update Drive and Notion
-    drive.rename(folder.drive.sub_folders[rm_sub_folder.id], rm_sub_folder.name)
-    notion.rename_sub_folder(folder.notion.sub_folders[rm_sub_folder.id], rm_sub_folder.name)
-
-    # Update sub-folder data
-    folder.rm.add_sub_folder(rm_sub_folder.id, rm_sub_folder.version)
-    folder.drive.sub_folders[rm_sub_folder.id]['name'] = rm_sub_folder.name
-
-    sub_folder = Folder(rm_sub_folder.name,
-                        id_=rm_sub_folder.id,
-                        rm=dict(id_=rm_sub_folder.id),
-                        drive=dict(id_=folder.drive.sub_folders[rm_sub_folder.id]),
-                        notion=dict(id_=folder.notion.sub_folders[rm_sub_folder.id]))
-
-    return sub_folder
+    try:
+        drive.rename(folder.drive.sub_folders[rm_sub_folder.id]['id'], rm_sub_folder.name)
+        notion.rename_sub_folder(folder.notion.sub_folders[rm_sub_folder.id], rm_sub_folder.name)
+        return True
+    except Exception as e:
+        logger.error(f"Could not update {rm_sub_folder.name}.")
+        logger.error(f"Error message: {e}")
+        return
 
 
 async def delete_sub_folder(folder, rm_sub_folder):
     logger.info(f"Deleting folder {rm_sub_folder.name}")
 
-    drive.delete(folder.drive.sub_folders[rm_sub_folder.id])
-    notion.delete(folder.notion.sub_folders[rm_sub_folder.id])
-
-    del folder.drive.sub_folders[rm_sub_folder.id]
-    del folder.notion.sub_folders[rm_sub_folder.id]
+    try:
+        logger.debug("Renaming on Drive and Notion")
+        drive.delete(folder.drive.sub_folders[rm_sub_folder.id]['id'])
+        notion.delete(folder.notion.sub_folders[rm_sub_folder.id])
+        return True
+    except Exception as e:
+        logger.error(f"Could not delete {rm_sub_folder.name}.")
+        logger.error(f"Error message: {e}")
+        return
 
 
 async def process_sub_folders(folder, folder_updates):
     for new_sub_folder in folder_updates.created:
-        await create_sub_folder(folder, new_sub_folder)
+        result = await create_sub_folder(folder, new_sub_folder)
+
+        # If the upload went smoothly, record it in the Folder
+        if result:
+            drive_sub_folder, notion_sub_folder = result
+            folder.rm.add_sub_folder(new_sub_folder.id, new_sub_folder.version)
+            folder.drive.add_sub_folder(new_sub_folder.id, dict(id=drive_sub_folder['id'],
+                                                                name=new_sub_folder.name,
+                                                                url=drive_sub_folder['embedLink']))
+            folder.notion.add_sub_folder(new_sub_folder.id, notion_sub_folder.id)
 
     for modified_sub_folder in folder_updates.modified:
-        await modify_sub_folder(folder, modified_sub_folder)
+        success = await modify_sub_folder(folder, modified_sub_folder)
+
+        # If the upload went smoothly, update the Folder data that has changed
+        if success:
+            folder.rm.add_sub_folder(modified_sub_folder.id, modified_sub_folder.version)
+            folder.drive.sub_folders[modified_sub_folder.id]['name'] = modified_sub_folder.name
 
     for deleted_sub_folder in folder_updates.deleted:
-        await delete_sub_folder(folder, deleted_sub_folder)
+        success = await delete_sub_folder(folder, deleted_sub_folder)
+
+        # If the upload went smoothly, delete the associated Folder data
+        if success:
+            del folder.rm.sub_folders[deleted_sub_folder.id]
+            del folder.drive.sub_folders[deleted_sub_folder.id]
+            del folder.notion.sub_folders[deleted_sub_folder.id]
 
     # Process sub-folder contents *after* making all the updates at this level
     for rm_id_ in folder.rm.sub_folders.keys():
@@ -180,20 +207,12 @@ async def mirror_updates(folder):
         file_updates = Updates(files)
         folder_updates = Updates(sub_folders)
 
-    logger.info(f"Found {len(file_updates.created)} new files, "
-                f"{len(file_updates.modified)} modified files, "
-                f"and {len(file_updates.deleted)} deleted files")
-
     if len(file_updates.created) > 0:
         logger.info(f"New files: {file_updates.created}")
     if len(file_updates.modified) > 0:
         logger.info(f"Modified files: {file_updates.modified}")
     if len(file_updates.deleted) > 0:
         logger.info(f"Deleted files: {file_updates.deleted}")
-
-    logger.info(f"Found {len(folder_updates.created)} new folders, "
-                f"{len(folder_updates.modified)} modified folders, "
-                f"and {len(folder_updates.deleted)} deleted folders")
 
     if len(folder_updates.created) > 0:
         logger.info(f"New folders: {folder_updates.created}")
@@ -204,6 +223,11 @@ async def mirror_updates(folder):
 
     await process_files(folder, file_updates)
     await process_sub_folders(folder, folder_updates)
+
+    # If something has changed, update the folder contents on disk
+    if file_updates.change or folder_updates.change:
+        folder.save()
+
 
 if __name__ == '__main__':
     root_folder = Folder('root',

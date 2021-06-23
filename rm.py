@@ -48,11 +48,17 @@ class Updates:
         if by_id:  # This is a true update record
             self.created = [item for item in new_items if self.created_q(item)]
             self.modified = [by_id[item] for item, version in old_items.items() if self.modified_q(item, version)]
-            self.deleted = [item for item in new_items if self.deleted_q(item)]
+            self.deleted = [by_id[item] for item in old_items.keys() if self.deleted_q(item)]
         else:  # This is a wrapper around a bunch of new items
             self.created = new_items
             self.modified = []
             self.deleted = []
+
+        # Use this to decide whether to write the Folder data back to disk
+        if len(self.created) > 0 or len(self.modified) > 0 or len(self.deleted) > 0:
+            self.change = True
+        else:
+            self.change = False
 
     def created_q(self, new_item):
         """ Returns True if the item is new and False otherwise. """
@@ -60,20 +66,19 @@ class Updates:
 
     def modified_q(self, old_item, old_version):
         """ Returns True if the item has been modified and False otherwise. """
-        if old_item not in self.by_id:
-            return False  # If this is possible, it would count as deleted
+        if old_item not in self.by_id or self.by_id[old_item].parent == 'trash':
+            return False  # In this case it counts as deleted
         elif self.by_id[old_item].version == old_version:
             return False
         else:
             return True
 
-    def deleted_q(self, new_item):
+    def deleted_q(self, old_item):
         """ Returns True if the item has been deleted and False otherwise. """
-
         # Normally the ID should show up as a child of the trash folder, but check just in case
-        if new_item.id not in self.by_id:
+        if old_item not in self.by_id:
             return True
-        elif self.by_id[new_item.id].parent == 'trash':
+        elif self.by_id[old_item].parent == 'trash':
             return True
         else:
             return False
