@@ -1,3 +1,5 @@
+from requests.exceptions import HTTPError
+
 from notion_client import Client
 
 from notion.client import NotionClient as UnofficialClient
@@ -10,7 +12,15 @@ class Notion:
     We use the official Notion API whenever possible, but the unofficial one is *much* more powerful. """
     def __init__(self, official_token, unofficial_token, root):
         self.client = Client(auth=official_token)
-        self.other_client = UnofficialClient(token_v2=unofficial_token)
+        try:
+            self.other_client = UnofficialClient(token_v2=unofficial_token)
+        except HTTPError as e:
+            from log import set_up_logger
+            logger = set_up_logger(__name__)
+            # Log it so an email gets sent if this happens
+            logger.error("Got an HTTP error from the unofficial Notion client. Did the token expire?")
+            logger.error(f"Error message: {e}")
+
         self.ROOT = root
 
     @staticmethod

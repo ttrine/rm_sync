@@ -230,12 +230,16 @@ async def mirror_updates(folder):
 
 
 if __name__ == '__main__':
-    root_folder = Folder('root',
-                         rm=dict(id_=rm.ROOT),
-                         drive=dict(id_=drive.ROOT),
-                         notion=dict(id_=notion.ROOT))
+    try:
+        root_folder = Folder('root',
+                             rm=dict(id_=rm.ROOT),
+                             drive=dict(id_=drive.ROOT),
+                             notion=dict(id_=notion.ROOT))
 
-    # Run the mirror_updates recursion
-    trio.run(mirror_updates, root_folder)
+        # Run the mirror_updates recursion
+        trio.run(mirror_updates, root_folder)
+    except Exception as e:
+        logger.error("An unexpected error occurred while executing the update script.")
+        logger.error(f"Error message: {e}")
 
     logger.info("Update complete")
