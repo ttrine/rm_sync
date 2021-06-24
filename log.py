@@ -87,4 +87,4 @@ class BufferingSMTPHandler(BufferingHandler):
 
         self.write_errors()
 
-        return bool(curr_msgs - prev_msgs)
+        return len(curr_msgs - prev_msgs) > 0
