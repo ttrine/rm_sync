@@ -1,6 +1,7 @@
 import logging
 from logging.handlers import BufferingHandler
 import os
+import pickle as pkl
 
 MAILHOST = os.environ['MAILHOST']
 FROMADDR = os.environ['FROMADDR']
@@ -64,8 +65,26 @@ class BufferingSMTPHandler(BufferingHandler):
 
             self.buffer = []
 
+    def write_errors(self):
+        """ Write errors in the buffer to a file outside of flush for comparison to the subsequent run. """
+        with open(".prev_errs", 'wb') as f:
+            pkl.dump(([record for record in self.buffer if record.levelname == 'ERROR']), f)
+
     def shouldFlush(self, record: logging.LogRecord) -> bool:
-        """ Only flush at the end of the script's execution, *if* there was an error. """
+        """ Only flush at the end of the script's execution, *if* there was a new (previously unseen) error. """
         if record.msg != "Update complete":
             return False
-        return any([record.levelname == 'ERROR' for record in self.buffer])
+
+        # On the last log statement, load up any errors from the previous run and compare with the current one.
+        # If there are any new errors, flush. If not, don't. Either way, overwrite previous errors with current ones.
+        curr_msgs = {record.msg for record in self.buffer if record.levelname == 'ERROR'}
+        if os.path.exists('.prev_errs'):
+            with open('.prev_errs', 'rb') as f:
+                prev_errors = pkl.load(f)
+            prev_msgs = {error.msg for error in prev_errors}
+        else:
+            prev_msgs = set()
+
+        self.write_errors()
+
+        return bool(curr_msgs - prev_msgs)
