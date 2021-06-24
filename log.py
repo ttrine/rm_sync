@@ -50,9 +50,12 @@ class BufferingSMTPHandler(BufferingHandler):
                             ",".join(self.toaddrs),
                             self.subject
                             )
+                msg = msg + "An error occurred while syncing your Remarkable contents.\r\n" \
+                            "Here is the full execution log:\r\n\r\n"
                 for record in self.buffer:
                     s = self.format(record)
                     msg = msg + s + "\r\n"
+                msg = msg.encode("ascii", "ignore")
                 smtp.sendmail(self.fromaddr, self.toaddrs, msg)
                 smtp.quit()
             except Exception as e:
