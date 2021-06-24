@@ -37,8 +37,12 @@ class BufferingSMTPHandler(BufferingHandler):
         self.toaddrs = toaddrs
         self.subject = subject
         self.setFormatter(logging.Formatter("%(asctime)s %(levelname)-5s %(message)s"))
+        self.should_flush = None
 
     def flush(self):
+        # This check is needed because by default logging flushes no matter what at the end of program execution
+        if not self.should_flush:
+            return
         if len(self.buffer) > 0:
             try:
                 import smtplib
@@ -87,4 +91,6 @@ class BufferingSMTPHandler(BufferingHandler):
 
         self.write_errors()
 
-        return len(curr_msgs - prev_msgs) > 0
+        # Need to check for this instance variable in flush() because logging does something weird when the program ends
+        self.should_flush = len(curr_msgs - prev_msgs) > 0
+        return self.should_flush
