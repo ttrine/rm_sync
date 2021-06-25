@@ -10,6 +10,7 @@ TOADDRS = os.environ['TOADDRS'].split(' ')
 
 def set_up_logger(module):
     logger = logging.getLogger(module)
+    logger.handlers = []
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-5s %(message)s')
 
